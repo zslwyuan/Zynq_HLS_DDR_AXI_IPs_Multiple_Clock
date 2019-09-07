@@ -69,13 +69,8 @@ volatile int RunHlsMacc_timer = 0;
 volatile int ResultAvailHlsMacc_timer = 0;
 
 
-
-
-int main()
+void test_200MHz()
 {
-	print("Start\n\r");
-    init_platform();
-
 
     int i, j, k;
     int status;
@@ -102,7 +97,7 @@ int main()
        exit(-1);
     }
 
-    print("HLS started\n\r");
+    print("HLS test for HLS IP with clock@200MHz started\n\r===================================\n\r");
 
 /////////////////////////////////////////////////////////////////////
 //////////////// initialize the data in DDR        //////////////////
@@ -214,7 +209,159 @@ int main()
     else printf("check failed\n\r");
     printf("----------------------------------------------\n\r");
 
+}
+
+void test_100MHz()
+{
+
+    int i, j, k;
+    int status;
+
+/////////////////////////////////////////////////////////////////////
+/////////////// Setup the control of the HLS module /////////////////
+/////////////////////////////////////////////////////////////////////
+
+    status = Zynq_2mm_clockChange_init(&hls_2mm, 0); // you need to modify this function according to your HLS function
+    if(status != XST_SUCCESS){
+       print("HLS 2mm setup failed\n\r");
+       exit(-1);
+    }
+    status = xtimer_init(&hls_timer); // you need to modify this function according to your HLS function
+    if(status != XST_SUCCESS){
+       print("HLS timer setup failed\n\r");
+       exit(-1);
+    }
+
+    //Setup the interrupt
+    status = setup_interrupt(); // you need to modify this function according to your HLS function
+    if(status != XST_SUCCESS){
+       print("Interrupt setup failed\n\r");
+       exit(-1);
+    }
+
+    print("HLS test for HLS IP with clock@100MHz started\n\r===================================\n\r");
+
+/////////////////////////////////////////////////////////////////////
+//////////////// initialize the data in DDR        //////////////////
+/////////////////////////////////////////////////////////////////////
+
+    int *D_output_AXI = (int *)(0x15000000);
+    int *A_AXI = (int *)(0x11000000);
+    int *B_AXI = (int *)(0x12000000);
+    int *C_AXI = (int *)(0x13000000);
+    int *D_input_AXI = (int *)(0x14000000);
+    int D_output_AXI_check[NI][NL];
+
+    arrayInitialize(A_AXI, B_AXI, C_AXI, D_input_AXI, D_output_AXI);
+
+	Zynq_2mm_clockChange_Set_D_output_AXI(&hls_2mm,D_output_AXI);
+	Zynq_2mm_clockChange_Set_A_AXI(&hls_2mm,A_AXI);
+	Zynq_2mm_clockChange_Set_B_AXI(&hls_2mm,B_AXI);
+	Zynq_2mm_clockChange_Set_C_AXI(&hls_2mm,C_AXI);
+	Zynq_2mm_clockChange_Set_D_input_AXI(&hls_2mm,D_input_AXI);
+
+
+
+
+/////////////////////////////////////////////////////////////////////
+/////  start the acceleration of FPGA and monitor its ending. ///////
+/////////////////////////////////////////////////////////////////////
+
+	unsigned int ticks;
+	xtimer_start(&hls_timer); // enable the timer
+	int ticks_array[100];
+
+	for (i=0;i<10;i++)
+	{
+	    int timer_user = 0;
+	    if (0) { // use interrupt
+	    	XTimer_Set_reset_signal(&hls_timer,1);
+	    	XTimer_Set_reset_signal(&hls_timer,0);
+	    	Zynq_2mm_clockChange_start(&hls_2mm); // you need to modify this function according to your HLS function
+
+	    //	print("Detecting interrupt from HLS HW.\n\r");
+	       while(!ResultAvailHlsMacc_2mm)
+	       {
+	    	   timer_user++;
+	       }
+	       ticks_array[i] = XTimer_Get_timeTicks(&hls_timer);
+	          ; // spin
+	       // print("Interrupt received from HLS HW.\n\r");
+	    } else
+	    { // Simple non-interrupt driven test
+	    	XTimer_Set_reset_signal(&hls_timer,1); // reset the timer
+	    	XTimer_Set_reset_signal(&hls_timer,0);
+	    	Zynq_2mm_clockChange_start(&hls_2mm); // you need to modify this function according to your HLS function
+
+	    //	print("Detecting HLS peripheral complete.\n\r");
+	       do {
+	    	   timer_user++;
+	       }
+	       while (!Zynq_2mm_clockChange_IsReady(&hls_2mm)); // because we are implementing dataflow, we should check IsReady but not IsDone
+	       // you need to modify this function according to your HLS function
+	       ticks_array[i] = XTimer_Get_timeTicks(&hls_timer);
+	       //print("Detected HLS peripheral complete. Result received.\n\r");
+	    }
+	}
+
+
+	for (i=0;i<10;i++)
+	{
+		// the initial interval will be raised gradually
+		// since the dataflow will go through faster until the data congest at the bottleneck module in the dataflow
+		printf("For data batch#%d: Timer FPGA ticks=%u.\n\r", i, ticks_array[i]);
+	}
+
+
+
+/////////////////////////////////////////////////////////////////////
+////////  run the application on the host CPU for check      ////////
+/////////////////////////////////////////////////////////////////////
+
+    printf("\n\r");
+    // run the application on CPU for checking
+    kernel_2mm_wrapper(
+    		A_AXI,
+    		B_AXI,
+    		C_AXI,
+    		D_input_AXI,
+			D_output_AXI_check);
+
+    // printf("ticks: %d\n\r",timer_user);
+
+    print("-------------------------------------------------done and check as below\n\r");
+  //  for(i=0;i<1000000000;i++);
+    Xil_DCacheInvalidateRange(D_output_AXI, 10000000*8);
+    int check_result = 0;
+
+    int check_list[] = {123, 85, 222, 111, 77, 93, 21, 13, 24, 64 };
+    for(i=0;i<10;i++)
+    {
+    	int check_i = check_list[i] / NL;
+    	int check_j = check_list[i] % NL;
+    	int data_check = D_output_AXI[check_list[i]];
+    	printf("addr=%d: expected:%d=== result:%u\n\r",check_list[i], D_output_AXI_check[check_i][check_j],data_check);
+
+    	if (D_output_AXI_check[check_i][check_j] == data_check)
+    	{
+    		check_result++;
+    	}
+    }
+    if (check_result==10) printf("check passed\n\r");
+    else printf("check failed\n\r");
+    printf("----------------------------------------------\n\r");
+
+
+}
+
+int main()
+{
+	print("Host Start\n\r");
+    init_platform();
+    test_100MHz();
+    test_200MHz();
     cleanup_platform();
+
     return 0;
 }
 
