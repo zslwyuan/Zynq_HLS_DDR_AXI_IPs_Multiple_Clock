@@ -1,0 +1,8 @@
+19:14:24 **** Incremental Build of configuration Debug for project clockChange ****
+make pre-build main-build 
+a9-linaro-pre-build-step
+ 
+make: Nothing to be done for 'main-build'.
+
+19:14:25 Build Finished (took 496ms)
+
